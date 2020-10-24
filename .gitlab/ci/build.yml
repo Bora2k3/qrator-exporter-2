@@ -1,0 +1,81 @@
+---
+.image: &image
+  image: docker:stable
+  services:
+    - name: docker:dind
+  variables:
+    DOCKER_BUILDKIT: 1
+
+.registry_login: &registry_login
+  before_script:
+    - docker login --username gitlab-ci-token --password ${CI_BUILD_TOKEN} ${CI_REGISTRY}
+
+.mr_condition: &mr_condition
+  only:
+    refs:
+      - merge_requests
+    changes:
+      - .gitlab/ci/build.yml
+      - Dockerfile
+      - main.go
+      - collector/*.go
+
+build_mr_image:
+  stage: build
+  <<: *image
+  <<: *mr_condition
+  script:
+    - docker build --pull --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:MR-${CI_MERGE_REQUEST_IID} .
+
+push_mr_image:
+  stage: push
+  <<: *image
+  <<: *mr_condition
+  <<: *registry_login
+  script:
+    - docker build --pull --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:MR-${CI_MERGE_REQUEST_IID} .
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_PATH}:MR-${CI_MERGE_REQUEST_IID}
+  when: manual
+
+build_latest:
+  stage: build
+  <<: *image
+  <<: *registry_login
+  script:
+    - docker build --pull --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:latest .
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_PATH}:latest
+  only:
+    refs:
+      - master
+    changes:
+      - .gitlab/ci/build.yml
+      - Dockerfile
+      - main.go
+      - collector/*.go
+
+check_tag:
+  stage: build
+  <<: *image
+  script:
+    - echo "${CI_COMMIT_TAG}" | grep "^[0-9].[0-9].[0-9]" || exit 1
+  only:
+    - tags
+  
+build:
+  stage: build
+  <<: *image
+  <<: *registry_login
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-\.]+)?$/'
+  script:
+    - MAJOR_TAG=$(echo ${CI_COMMIT_TAG} | cut -d "." -f 1)
+    - MINOR_TAG=$(echo ${CI_COMMIT_TAG} | cut -d "." -f 1-2)
+    - docker build --pull --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:${CI_COMMIT_TAG}
+      --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:${MINOR_TAG}
+      --tag ${CI_REGISTRY}/${CI_PROJECT_PATH}:${MAJOR_TAG} .
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_PATH}:${CI_COMMIT_TAG}
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_PATH}:${MINOR_TAG}
+    - |
+      if [[ ${MAJOR_TAG} -gt 0 ]]; then
+        docker push ${CI_REGISTRY}/${CI_PROJECT_PATH}:${MAJOR_TAG}
+      fi

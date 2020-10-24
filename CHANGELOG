@@ -1,0 +1,9 @@
+# CHANGELOG
+
+## [Unreleased]
+### Added
+
+  * Get latest statistics snapshot for:
+    * IP metrics for each online domain;
+    * HTTP metrics for each online domain;
+

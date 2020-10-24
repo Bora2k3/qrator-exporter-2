@@ -1,0 +1,7 @@
+---
+stages:
+  - build
+  - push
+
+include:
+  - local: .gitlab/ci/build.yml
