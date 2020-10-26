@@ -40,13 +40,16 @@ func main() {
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/healthz", healthz)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
+		_, err = w.Write([]byte(`<html>
 			<head><title>Qrator Exporter</head>
 			<body>
 			<h2>Qrator Exporter</h2>
 			<p><a href="` + *metricsPath + `">Metrics</a></p>
 			</body>
 			<html>`))
+		if err != nil {
+			log.Fatalln(err)
+		}
 	})
 
 	fmt.Printf("Starting Qrator exporter server on address: %s\n", *listenAddress)

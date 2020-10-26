@@ -38,6 +38,7 @@ func NewCollector(id, token string) (*Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Request method 'ping' got status '%v'", err)
 	}
+
 	if response.Result != "pong" {
 		return nil, fmt.Errorf("Request method 'ping' got invalid status from Qrator API")
 	}
@@ -57,6 +58,7 @@ func HTTPRequest(methodClass, method, id, authToken string) (*http.Response, err
 
 	body, _ := json.Marshal(data)
 	request, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(body))
+
 	if err != nil {
 		return nil, fmt.Errorf("Cannot create new request: %v", err)
 	}
@@ -67,6 +69,7 @@ func HTTPRequest(methodClass, method, id, authToken string) (*http.Response, err
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	response, err := client.Do(request)
+
 	if err != nil {
 		return nil, fmt.Errorf("Cannot make new request: %v", err)
 	}
@@ -78,9 +81,11 @@ func HTTPRequest(methodClass, method, id, authToken string) (*http.Response, err
 func DecodeResponse(httpResponse *http.Response) (*ResponseData, error) {
 	var decode ResponseData
 	err := json.NewDecoder(httpResponse.Body).Decode(&decode)
+
 	if err != nil {
 		return nil, fmt.Errorf("Got error while decoding json. %v", err)
 	}
+
 	if decode.Error != "" {
 		return nil, fmt.Errorf("%s", decode.Error)
 	}
@@ -102,7 +107,10 @@ func (c *Collector) domainsList() ([]Domain, error) {
 		return nil, err
 	}
 
-	mapstructure.Decode(decodeResult.Result, &domains)
+	err = mapstructure.Decode(decodeResult.Result, &domains)
+	if err != nil {
+		return nil, err
+	}
 
 	return domains, nil
 }
@@ -114,6 +122,7 @@ func (c *Collector) onlineDomains() ([]Domain, error) {
 	}
 
 	var result []Domain
+
 	for _, domain := range domains {
 		if domain.Status == onlineStatus && !domain.IsService {
 			result = append(result, domain)
@@ -128,12 +137,19 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	prometheus.DescribeByCollect(c, ch)
 }
 
+func (c *Collector) registerJSONDecodeError(domainName, apiMethod string, ch chan<- prometheus.Metric) {
+	c.failedStatisticsScrapes.WithLabelValues(domainName, apiMethod).Inc()
+	ch <- c.failedStatisticsScrapes.WithLabelValues(domainName, apiMethod)
+}
+
 func (c *Collector) scripe(ch chan<- prometheus.Metric) error {
+	processError := make(chan error)
+	processDone := make(chan bool)
+
 	c.totalScrapes.Inc()
 
 	onlineDomains, err := c.onlineDomains()
 	if err != nil {
-		log.Println(err)
 		c.failedDomainScrapes.Inc()
 		return err
 	}
@@ -143,7 +159,7 @@ func (c *Collector) scripe(ch chan<- prometheus.Metric) error {
 	for _, domain := range onlineDomains {
 		waitGroup.Add(2)
 
-		go func(domain Domain, ch chan<- prometheus.Metric, waitGroup *sync.WaitGroup) error {
+		go func(domain Domain, ch chan<- prometheus.Metric, waitGroup *sync.WaitGroup) {
 			defer waitGroup.Done()
 
 			var (
@@ -155,18 +171,21 @@ func (c *Collector) scripe(ch chan<- prometheus.Metric) error {
 			if err != nil {
 				c.failedStatisticsScrapes.WithLabelValues(domain.Name, apiMethod).Inc()
 				ch <- c.failedStatisticsScrapes.WithLabelValues(domain.Name, apiMethod)
-				return err
+				processError <- err
 			}
 			defer response.Body.Close()
 
 			statistics, err := DecodeResponse(response)
 			if err != nil {
-				c.failedJSONDecode.WithLabelValues(domain.Name, apiMethod).Inc()
-				ch <- c.failedJSONDecode.WithLabelValues(domain.Name, apiMethod)
-				return err
+				c.registerJSONDecodeError(domain.Name, apiMethod, ch)
+				processError <- err
 			}
 
-			mapstructure.Decode(statistics.Result, &decodeStatistics)
+			err = mapstructure.Decode(statistics.Result, &decodeStatistics)
+			if err != nil {
+				c.registerJSONDecodeError(domain.Name, apiMethod, ch)
+				processError <- err
+			}
 
 			c.HTTPRequests.WithLabelValues(domain.Name, apiMethod).Set(decodeStatistics.Requests)
 
@@ -204,11 +223,9 @@ func (c *Collector) scripe(ch chan<- prometheus.Metric) error {
 
 			ch <- c.failedStatisticsScrapes.WithLabelValues(domain.Name, apiMethod)
 			ch <- c.failedJSONDecode.WithLabelValues(domain.Name, apiMethod)
-
-			return nil
 		}(domain, ch, waitGroup)
 
-		go func(domain Domain, ch chan<- prometheus.Metric, waitGroup *sync.WaitGroup) error {
+		go func(domain Domain, ch chan<- prometheus.Metric, waitGroup *sync.WaitGroup) {
 			defer waitGroup.Done()
 
 			var (
@@ -220,18 +237,21 @@ func (c *Collector) scripe(ch chan<- prometheus.Metric) error {
 			if err != nil {
 				c.failedStatisticsScrapes.WithLabelValues(domain.Name, apiMethod).Inc()
 				ch <- c.failedStatisticsScrapes.WithLabelValues(domain.Name, apiMethod)
-				return err
+				processError <- err
 			}
 			defer response.Body.Close()
 
 			statistics, err := DecodeResponse(response)
 			if err != nil {
-				c.failedJSONDecode.WithLabelValues(domain.Name, apiMethod).Inc()
-				ch <- c.failedJSONDecode.WithLabelValues(domain.Name, apiMethod)
-				return err
+				c.registerJSONDecodeError(domain.Name, apiMethod, ch)
+				processError <- err
 			}
 
-			mapstructure.Decode(statistics.Result, &decodeStatistics)
+			err = mapstructure.Decode(statistics.Result, &decodeStatistics)
+			if err != nil {
+				c.registerJSONDecodeError(domain.Name, apiMethod, ch)
+				processError <- err
+			}
 
 			c.BandwidthTraffic.WithLabelValues(domain.Name, "input", apiMethod).Set(decodeStatistics.Bandwidth.Input)
 			c.BandwidthTraffic.WithLabelValues(domain.Name, "passed", apiMethod).Set(decodeStatistics.Bandwidth.Passed)
@@ -257,11 +277,22 @@ func (c *Collector) scripe(ch chan<- prometheus.Metric) error {
 
 			ch <- c.failedStatisticsScrapes.WithLabelValues(domain.Name, apiMethod)
 			ch <- c.failedJSONDecode.WithLabelValues(domain.Name, apiMethod)
-
-			return nil
 		}(domain, ch, waitGroup)
 	}
-	waitGroup.Wait()
+
+	go func() {
+		waitGroup.Wait()
+		close(processDone)
+	}()
+
+	select {
+	case <-processDone:
+		break
+	case err := <-processError:
+		close(processError)
+		return err
+	}
+
 	return nil
 }
 

@@ -3,7 +3,6 @@ package collector
 import "github.com/prometheus/client_golang/prometheus"
 
 func (c *Collector) metrics() {
-
 	c.up = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Name:      "up",
