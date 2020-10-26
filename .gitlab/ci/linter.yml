@@ -1,0 +1,13 @@
+---
+check_go_files:
+  stage: check
+  image: golangci/golangci-lint:v1.31.0
+  script:
+    - golangci-lint run -v -E gosec,whitespace,wsl
+  only:
+    refs:
+      - branches
+      - merge_requests
+    changes:
+      - main.go
+      - collector/*.go

@@ -1,7 +1,9 @@
 ---
 stages:
+  - check
   - build
   - push
 
 include:
+  - local: .gitlab/ci/linter.yml
   - local: .gitlab/ci/build.yml
